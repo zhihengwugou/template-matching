@@ -19,7 +19,7 @@ python3 -m pip install -r requirements.txt
 ## 项目文件说明
 
 - `demo_icp.py`：模板匹配与基础对齐示例
-- `demo_offset_shell.py`：Offset 壳体最简 PoC（法线位移）
+- `demo_offset_shell.py`：Offset 壳体 PoC（支持 `normal` 法线位移与更严格 `boolean` 布尔法）
 - `view_stl.py`：查看 STL 文件
 - `封     雅文.stl`：模板 STL
 
@@ -37,24 +37,30 @@ python3 demo_icp.py
 python3 demo_icp.py --show
 ```
 
-### 2) Offset 壳体生成（最简）
+### 2) Offset 壳体生成（支持 normal / boolean）
 
-立方体：
+严格布尔法（推荐，几何更严格）：
 
 ```bash
-python3 demo_offset_shell.py --shape box --offset 2.0
+python3 demo_offset_shell.py --shape box --offset 2.0 --method boolean
 ```
 
-圆柱体：
+圆柱体（布尔法）：
 
 ```bash
-python3 demo_offset_shell.py --shape cylinder --radius 8 --height 20 --offset 1.5
+python3 demo_offset_shell.py --shape cylinder --radius 8 --height 20 --offset 1.5 --method boolean
+```
+
+法线位移法（快速对照）：
+
+```bash
+python3 demo_offset_shell.py --shape box --offset 2.0 --method normal
 ```
 
 可视化对比：
 
 ```bash
-python3 demo_offset_shell.py --shape box --offset 2.0 --show
+python3 demo_offset_shell.py --shape box --offset 2.0 --method boolean --show
 ```
 
 ### 3) 查看导出的 STL
@@ -73,5 +79,8 @@ python3 view_stl.py --stl offset_outputs/box_base.stl
 
 ## 说明
 
-当前 Offset 实现为“沿顶点法线位移”的最简概念验证，适合快速验证思路。  
-在尖角或高曲率区域，它不一定是严格数学意义上的等距壳体；后续可升级为 SDF 或布尔运算方案。
+- `normal` 方法：沿顶点法线位移，速度快，适合快速验证思路。  
+- `boolean` 方法：通过 `outer - base` 生成壳体，几何更严格，推荐用于当前概念验证。
+- 布尔法会额外导出壳体网格，例如：
+  - `offset_outputs/box_shell_boolean_2.000.stl`
+  - `offset_outputs/cylinder_shell_boolean_1.500.stl`

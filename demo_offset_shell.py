@@ -12,6 +12,12 @@ def parse_args() -> argparse.Namespace:
         description="参数化建模最简 PoC：对立方体/圆柱体做等距偏移（Offset）演示。"
     )
     parser.add_argument(
+        "--method",
+        choices=["normal", "boolean"],
+        default="boolean",
+        help="Offset 方法：normal=法线位移（快速），boolean=布尔法（更严格）。",
+    )
+    parser.add_argument(
         "--shape",
         choices=["box", "cylinder"],
         default="box",
@@ -73,6 +79,25 @@ def create_base_mesh(args: argparse.Namespace) -> trimesh.Trimesh:
     )
 
 
+def create_outer_mesh(args: argparse.Namespace) -> trimesh.Trimesh:
+    """
+    为布尔壳体法创建“外层”网格。
+
+    说明：
+    - box: 边长增加 2 * offset
+    - cylinder: 半径增加 offset，高度增加 2 * offset
+    """
+    if args.shape == "box":
+        outer_size = args.box_size + 2.0 * args.offset
+        return trimesh.creation.box(extents=[outer_size, outer_size, outer_size])
+
+    return trimesh.creation.cylinder(
+        radius=args.radius + args.offset,
+        height=args.height + 2.0 * args.offset,
+        sections=args.sections,
+    )
+
+
 def offset_by_vertex_normals(mesh: trimesh.Trimesh, distance: float) -> trimesh.Trimesh:
     """
     最简 Offset：沿顶点法线方向平移顶点。
@@ -85,6 +110,23 @@ def offset_by_vertex_normals(mesh: trimesh.Trimesh, distance: float) -> trimesh.
     normals = offset_mesh.vertex_normals
     offset_mesh.vertices = offset_mesh.vertices + normals * distance
     return offset_mesh
+
+
+def build_shell_by_boolean(
+    base_mesh: trimesh.Trimesh,
+    outer_mesh: trimesh.Trimesh,
+) -> trimesh.Trimesh:
+    """
+    布尔法壳体：shell = outer - base。
+
+    需要布尔引擎支持（此项目安装了 manifold3d，可作为 engine='manifold'）。
+    """
+    shell_mesh = trimesh.boolean.difference([outer_mesh, base_mesh], engine="manifold")
+    if shell_mesh is None:
+        raise RuntimeError("布尔差集返回空结果，请检查网格或布尔引擎。")
+    if not isinstance(shell_mesh, trimesh.Trimesh):
+        raise TypeError("布尔差集结果不是单个 Trimesh 对象。")
+    return shell_mesh
 
 
 def print_mesh_info(title: str, mesh: trimesh.Trimesh) -> None:
@@ -103,20 +145,30 @@ def export_meshes(
     export_dir: Path,
     shape: str,
     offset: float,
+    method: str,
     base_mesh: trimesh.Trimesh,
     offset_mesh: trimesh.Trimesh,
+    shell_mesh: trimesh.Trimesh | None = None,
 ) -> None:
     export_dir.mkdir(parents=True, exist_ok=True)
     base_path = export_dir / f"{shape}_base.stl"
-    offset_path = export_dir / f"{shape}_offset_{offset:.3f}.stl"
+    offset_path = export_dir / f"{shape}_offset_{method}_{offset:.3f}.stl"
     base_mesh.export(base_path)
     offset_mesh.export(offset_path)
     print("\n=== 文件导出 ===")
     print(f"原始网格已导出: {base_path}")
     print(f"偏移网格已导出: {offset_path}")
+    if shell_mesh is not None:
+        shell_path = export_dir / f"{shape}_shell_boolean_{offset:.3f}.stl"
+        shell_mesh.export(shell_path)
+        print(f"壳体网格已导出: {shell_path}")
 
 
-def show_scene(base_mesh: trimesh.Trimesh, offset_mesh: trimesh.Trimesh) -> None:
+def show_scene(
+    base_mesh: trimesh.Trimesh,
+    offset_mesh: trimesh.Trimesh,
+    shell_mesh: trimesh.Trimesh | None = None,
+) -> None:
     base_vis = base_mesh.copy()
     offset_vis = offset_mesh.copy()
     base_vis.visual.face_colors = [0, 200, 0, 120]      # 绿色：原始网格
@@ -124,6 +176,10 @@ def show_scene(base_mesh: trimesh.Trimesh, offset_mesh: trimesh.Trimesh) -> None
     scene = trimesh.Scene()
     scene.add_geometry(base_vis, node_name="原始网格")
     scene.add_geometry(offset_vis, node_name="偏移网格")
+    if shell_mesh is not None:
+        shell_vis = shell_mesh.copy()
+        shell_vis.visual.face_colors = [255, 140, 0, 120]  # 橙色：布尔壳体
+        scene.add_geometry(shell_vis, node_name="布尔壳体")
     scene.show()
 
 
@@ -136,24 +192,47 @@ def main() -> None:
     print("开始执行：参数化建模 Offset 最简概念验证")
     print(f"基础几何体: {args.shape}")
     print(f"偏移距离: {args.offset}")
+    print(f"Offset 方法: {args.method}")
 
     # 第一步：创建基础几何体网格（box 或 cylinder）
     base_mesh = create_base_mesh(args)
     print_mesh_info("原始网格信息", base_mesh)
 
-    # 第二步：沿顶点法线做最简偏移
-    offset_mesh = offset_by_vertex_normals(base_mesh, args.offset)
+    shell_mesh: trimesh.Trimesh | None = None
+
+    # 第二步：根据方法生成偏移网格
+    if args.method == "normal":
+        offset_mesh = offset_by_vertex_normals(base_mesh, args.offset)
+        print("\n提示：当前使用法线位移，速度快但几何严格性较弱。")
+    else:
+        # 布尔法：先构造外层网格，再做差集得到壳体。
+        outer_mesh = create_outer_mesh(args)
+        shell_mesh = build_shell_by_boolean(base_mesh, outer_mesh)
+        offset_mesh = outer_mesh
+        print("\n提示：当前使用布尔法，几何结果更严格。")
+        print_mesh_info("布尔壳体网格信息", shell_mesh)
+
     print_mesh_info("偏移后网格信息", offset_mesh)
 
-    print("\n提示：当前实现是“法线位移”的最简 PoC，适合快速验证思路。")
-    print("在尖角位置它不一定是严格数学等距壳体；后续可升级为 SDF/布尔法。")
+    if args.method == "normal":
+        print("在尖角位置它不一定是严格数学等距壳体；建议使用 boolean 方法。")
+    else:
+        print("布尔壳体方式更适合工程上的壳体生成概念验证。")
 
     # 第三步：导出结果，便于在外部 CAD/3D 工具中检查
-    export_meshes(args.export_dir, args.shape, args.offset, base_mesh, offset_mesh)
+    export_meshes(
+        args.export_dir,
+        args.shape,
+        args.offset,
+        args.method,
+        base_mesh,
+        offset_mesh,
+        shell_mesh,
+    )
 
     # 第四步（可选）：可视化对比
     if args.show:
-        show_scene(base_mesh, offset_mesh)
+        show_scene(base_mesh, offset_mesh, shell_mesh)
 
 
 if __name__ == "__main__":
